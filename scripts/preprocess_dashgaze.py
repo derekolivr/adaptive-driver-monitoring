@@ -31,16 +31,19 @@ def process_dashgaze_data(video_path, csv_path, output_dir):
     total_frames_in_video = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     print(f"Video loaded successfully. Total frames: {total_frames_in_video}")
 
-    # --- MODIFICATION: Sample 10 frames spread evenly across the dataset ---
-    num_samples = 10
+    # --- MODIFICATION: Sample frames spread evenly across the dataset ---
+    # For testing: 10 samples, For training: 500+ samples
+    num_samples = 500  # Increased for creating a fine-tuning dataset
     indices = np.linspace(0, len(df) - 1, num_samples, dtype=int)
     df_sampled = df.iloc[indices]
     print(f"Sampling {num_samples} frames evenly spaced throughout the video.")
 
     # 3. Define crop regions using the exact coordinates you provided
     # --- FIX: Using pixel-perfect coordinates from the find_dimensions.py tool ---
-    driver_crop = (6, 7, 950, 1068)      # x, y, width, height
-    road_crop = (962, 6, 955, 1071)      # x, y, width, height
+    # Video is 3008x1080 with three views: driver (left) | road (middle) | camera (right)
+    driver_crop = (6, 7, 950, 1068)      # x, y, width, height - Left: driver face
+    road_crop = (962, 6, 955, 1071)      # x, y, width, height - Middle: road view
+    camera_crop = (1920, 6, 1082, 1071)  # x, y, width, height - Right: driver-mounted camera
 
     # 4. Loop through the CSV and extract frames
     print(f"Processing {len(df_sampled)} frames...")
@@ -55,14 +58,16 @@ def process_dashgaze_data(video_path, csv_path, output_dir):
         ret, frame = cap.read()
 
         if ret:
-            # Crop the driver and road views
+            # Crop all three views
             driver_view = frame[driver_crop[1]:driver_crop[1]+driver_crop[3], driver_crop[0]:driver_crop[0]+driver_crop[2]]
             road_view = frame[road_crop[1]:road_crop[1]+road_crop[3], road_crop[0]:road_crop[0]+road_crop[2]]
+            camera_view = frame[camera_crop[1]:camera_crop[1]+camera_crop[3], camera_crop[0]:camera_crop[0]+camera_crop[2]]
 
             # Save the cropped images
             base_filename = f"frame_{frame_number:05d}"
             cv2.imwrite(os.path.join(output_dir, f"{base_filename}_driver.jpg"), driver_view)
             cv2.imwrite(os.path.join(output_dir, f"{base_filename}_road.jpg"), road_view)
+            cv2.imwrite(os.path.join(output_dir, f"{base_filename}_camera.jpg"), camera_view)
             
             # --- NEW: Save ground truth data as a JSON file ---
             ground_truth = {

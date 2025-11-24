@@ -7,13 +7,15 @@ class FusionEngine:
         This engine combines gaze and road context to determine driver focus.
         """
         # Define gaze angle thresholds in DEGREES for different zones.
-        # These values may need tuning based on camera position.
+        # Updated based on DashGaze dataset analysis and visual inspection
+        # Note: These zones account for typical driving head poses
         self.gaze_zones = {
-            "Road Ahead": {"yaw_range": (-15, 15), "pitch_range": (-10, 5)},
-            "Left Mirror/Window": {"yaw_range": (-50, -20), "pitch_range": (-15, 10)},
-            "Right Mirror/Window": {"yaw_range": (20, 50), "pitch_range": (-15, 10)},
-            "Center Console/Radio": {"yaw_range": (-20, 20), "pitch_range": (10, 40)},
-            "Rear-view Mirror": {"yaw_range": (-15, 15), "pitch_range": (-30, -15)},
+            "Road Ahead": {"yaw_range": (-8, 8), "pitch_range": (-8, 8)},
+            "Left Mirror/Window": {"yaw_range": (-60, -10), "pitch_range": (-25, 20)},
+            "Right Mirror/Window": {"yaw_range": (10, 60), "pitch_range": (-25, 20)},
+            "Rear-view Mirror": {"yaw_range": (-8, 8), "pitch_range": (-40, -10)},
+            "Center Console/Radio": {"yaw_range": (-12, 12), "pitch_range": (20, 45)},
+            "Down (Phone/Lap)": {"yaw_range": (-12, 12), "pitch_range": (8, 20)},
         }
 
     def classify_gaze_zone(self, pitch, yaw):

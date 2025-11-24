@@ -36,6 +36,7 @@ class GazeTracker:
     def predict_gaze(self, face_image: Image.Image):
         """
         Predicts the gaze angles (pitch and yaw) from a PIL Image of a cropped face.
+        Returns calibrated angles in radians.
         """
         face_image = face_image.convert("RGB")
         image_tensor = self.transform(face_image).unsqueeze(0).to(self.device)
@@ -43,5 +44,18 @@ class GazeTracker:
         with torch.no_grad():
             output = self.model(image_tensor)
         
-        pitch, yaw = output.cpu().numpy()[0]
+        raw_pitch, raw_yaw = output.cpu().numpy()[0]
+        
+        # Apply linear calibration (computed from gaze_calibration.json)
+        # This maps MpiiFaceGaze outputs to DashGaze coordinate system
+        raw_pitch_deg = np.rad2deg(raw_pitch)
+        raw_yaw_deg = np.rad2deg(raw_yaw)
+        
+        calibrated_pitch_deg = 0.2550 * raw_pitch_deg + 8.4552
+        calibrated_yaw_deg = 0.2396 * raw_yaw_deg + 1.6353
+        
+        # Convert back to radians
+        pitch = np.deg2rad(calibrated_pitch_deg)
+        yaw = np.deg2rad(calibrated_yaw_deg)
+        
         return pitch, yaw

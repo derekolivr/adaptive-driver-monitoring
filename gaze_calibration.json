@@ -1,0 +1,10 @@
+{
+    "pitch_scale": 0.2550154410841936,
+    "pitch_offset": 8.455190319021554,
+    "yaw_scale": 0.23955967642816203,
+    "yaw_offset": 1.6352767984872143,
+    "error_pitch_before": 17.595416870265513,
+    "error_pitch_after": 2.7999769098751086,
+    "error_yaw_before": 4.444890733981129,
+    "error_yaw_after": 4.122913683579319
+}
