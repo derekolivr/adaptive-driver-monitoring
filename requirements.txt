@@ -1,11 +1,13 @@
-streamlit
-tensorflow-macos==2.16.2
-tensorflow-metal==1.2.0
-opencv-python
 numpy
+opencv-python
 Pillow
-# protobuf==3.20.3  <- This is likely causing the conflict, commenting out to allow a compatible version.
-ultralytics
+streamlit
 torch
 torchvision
-scipy
+tqdm
+ultralytics
+pandas
+# The following versions are critical for TensorFlow on Apple Silicon
+tensorflow-macos==2.15.0
+tensorflow-metal==1.1.0
+keras==2.15.0

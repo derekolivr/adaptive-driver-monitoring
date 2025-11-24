@@ -30,23 +30,24 @@ class FusionEngine:
         
         return "Looking Elsewhere"
 
-    def assess_driver_state(self, gaze_zone, distraction_label, road_objects):
+    def assess_driver_state(self, gaze_zone, road_objects):
         """
-        Provides a high-level assessment of the driver's state.
+        Provides a high-level assessment of the driver's state based on gaze and road context.
         """
-        # Rule-based assessment
-        if "safe driving" not in distraction_label and distraction_label is not None:
-             # High priority alert for manual distraction
-            return f"ALERT: Driver is distracted ({distraction_label.split(': ')[1]})!"
-       
+        # Rule-based assessment using only gaze tracking and road context
+        if gaze_zone == "Looking Elsewhere":
+            return f"WARNING: Driver's gaze is significantly off-road!"
+        
         if gaze_zone != "Road Ahead":
-             # Alert for visual distraction
+            # Alert for visual distraction
             return f"WARNING: Driver is looking at {gaze_zone} instead of the road."
 
+        # Driver is looking at road ahead - check road context
         if "person" in road_objects:
-            return "CAUTION: Pedestrian detected on the road. Driver is focused."
+            return "CAUTION: Pedestrian detected. Driver is appropriately focused on the road."
         
         if len(road_objects) > 0:
-            return f"Driver is focused on the road. Detected: {', '.join(set(road_objects))}."
+            unique_objects = ', '.join(set(road_objects))
+            return f"Driver is focused on the road ahead. Detected: {unique_objects}."
 
-        return "Driver is focused on the road ahead."
+        return "Driver is focused on the road ahead. No critical objects detected."
