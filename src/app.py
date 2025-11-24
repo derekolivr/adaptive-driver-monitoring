@@ -275,7 +275,7 @@ if driver_image and road_image:
 
     else:
     # No data loaded
-    st.info("👆 Select a test scenario from the sidebar or upload your own images")
+        st.info("👆 Select a test scenario from the sidebar or upload your own images")
     
     col_i1, col_i2, col_i3 = st.columns(3)
     with col_i1:

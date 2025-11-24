@@ -151,7 +151,8 @@ data/
 # Processed test data from datasets
 test_data/
 
-# Large video files
+# Large video/dataset files
 test/*.mp4
 test/*.avi
 test/*.mov
+test/*.csv
