@@ -158,7 +158,7 @@ if driver_image and road_image:
     
     # Process road
     annotated_road_image, road_objects = models["road"].detect_objects(road_image)
-    
+        
     # Get ground truth
     gt_azimuth_deg = ground_truth.get('azimuth_deg')
     gt_elevation_deg = ground_truth.get('elevation_deg')
@@ -166,7 +166,7 @@ if driver_image and road_image:
     if gt_azimuth_deg is not None and gt_elevation_deg is not None:
         gt_yaw = np.deg2rad(gt_azimuth_deg)
         gt_pitch = np.deg2rad(gt_elevation_deg)
-    
+
     # --- ALERT SECTION (Display at top using placeholder) ---
     # Determine alert level
     assessment = models["fusion"].assess_driver_state(gaze_zone, road_objects)
@@ -205,7 +205,7 @@ if driver_image and road_image:
         else:
             st.metric("📊 Gaze Angles", f"P: {np.rad2deg(pred_pitch):.1f}°", 
                      delta=f"Y: {np.rad2deg(pred_yaw):.1f}°")
-    
+
     # --- CAMERA FEEDS (OPTIONAL) ---
     if show_images:
         st.markdown("---")
@@ -273,7 +273,7 @@ if driver_image and road_image:
             - Down (Phone/Lap): ±12° yaw, 8-20° pitch
             """)
 
-else:
+    else:
     # No data loaded
     st.info("👆 Select a test scenario from the sidebar or upload your own images")
     
