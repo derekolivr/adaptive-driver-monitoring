@@ -6,7 +6,7 @@ import os
 from dataset import GazeDataset # Import the dataset class
 import numpy as np # Import numpy for calculations
 
-def predict_gaze(image_path, model_path="gaze_tracker_best.pth"):
+def predict_gaze(image_path, model_path="gaze_tracker_endterm.pth"):
     """
     Predicts the gaze coordinates from a single image.
 
@@ -85,7 +85,7 @@ if __name__ == '__main__':
         
         # 3. Run the prediction
         # The model path is also relative to the root folder
-        predicted_gaze = predict_gaze(image_path, model_path="gaze_tracker_best.pth")
+        predicted_gaze = predict_gaze(image_path, model_path="gaze_tracker_endterm.pth")
         
         # 4. Compare the results
         if predicted_gaze:
