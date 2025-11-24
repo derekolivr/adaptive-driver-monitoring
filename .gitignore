@@ -147,3 +147,6 @@ cython_debug/
 *.hdf5
 
 data/
+
+# Processed test data from datasets
+test_data/
