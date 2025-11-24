@@ -145,3 +145,5 @@ cython_debug/
 # Models
 *.h5
 *.hdf5
+
+data/
