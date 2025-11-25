@@ -93,7 +93,16 @@ def draw_gaze_vectors(image: Image.Image, pred_pitch, pred_yaw, gt_pitch=None, g
     return Image.fromarray(image_cv)
 
 # --- Helper to find test scenarios ---
-def find_test_scenarios(data_dir):
+def find_test_scenarios(data_dir, dataset_label=""):
+    """Find test scenarios in a data directory.
+    
+    Args:
+        data_dir: Directory containing processed test data
+        dataset_label: Optional label to prefix scenario names (e.g., "DashGaze", "Brain4Cars")
+    
+    Returns:
+        Dictionary mapping scenario names to (driver_path, road_path, camera_path, gt_path)
+    """
     scenarios = {}
     gt_files = sorted(glob.glob(os.path.join(data_dir, "*_gt.json")))
     for gt_path in gt_files:
@@ -102,54 +111,46 @@ def find_test_scenarios(data_dir):
         road_path = os.path.join(data_dir, f"{base_name}_road.jpg")
         camera_path = os.path.join(data_dir, f"{base_name}_camera.jpg")
         if os.path.exists(driver_path) and os.path.exists(road_path):
-            scenario_name = f"{base_name}"
+            if dataset_label:
+                scenario_name = f"[{dataset_label}] {base_name}"
+            else:
+                scenario_name = f"{base_name}"
             scenarios[scenario_name] = (driver_path, road_path, camera_path, gt_path)
     return scenarios
 
 # --- Load models first (before any UI) ---
 models = load_models()
 
-# --- Sidebar (configured early to avoid layout shifts) ---
-TEST_DATA_DIR = os.path.join("test_data", "dashgaze_processed")
-scenarios = find_test_scenarios(TEST_DATA_DIR)
-scenario_keys = ["Upload Custom"] + list(scenarios.keys())
-
-with st.sidebar:
-    st.header("📁 Data Source")
-    selected_scenario_key = st.selectbox("Select Scenario", scenario_keys, label_visibility="collapsed")
-    
-    st.markdown("---")
-    st.markdown("**🔧 Advanced**")
-    show_images = st.checkbox("Show camera feeds", value=True)
-    show_details = st.checkbox("Show technical details", value=False)
-
 # --- Main App ---
 st.title("🚗 Driver Monitoring System")
 
-# Placeholder for status (will be filled after processing)
-status_placeholder = st.empty()
+# Sidebar for global settings
+with st.sidebar:
+    st.markdown("**🔧 Settings**")
+    show_images = st.checkbox("Show camera feeds", value=True)
+    show_details = st.checkbox("Show technical details", value=False)
 
-# Initialize variables
-driver_image, road_image, camera_image, ground_truth = None, None, None, {}
-gaze_zone, road_objects = None, []
+# --- Load scenarios from both datasets ---
+DASHGAZE_DIR = os.path.join("test_data", "dashgaze_processed")
+BRAIN4CARS_DIR = os.path.join("test_data", "brain4cars_processed")
 
-# --- Data Loading ---
-if selected_scenario_key != "Upload Custom":
-    driver_path, road_path, camera_path, gt_path = scenarios[selected_scenario_key]
-    driver_image = Image.open(driver_path)
-    road_image = Image.open(road_path)
-    camera_image = Image.open(camera_path) if os.path.exists(camera_path) else None
-    with open(gt_path, 'r') as f:
-        ground_truth = json.load(f)
-else:
-    st.sidebar.markdown("**Upload Images:**")
-    driver_file = st.sidebar.file_uploader("Driver Face", type=["jpg", "jpeg", "png"], key="driver")
-    road_file = st.sidebar.file_uploader("Road View", type=["jpg", "jpeg", "png"], key="road")
-    if driver_file: driver_image = Image.open(driver_file)
-    if road_file: road_image = Image.open(road_file)
+dashgaze_scenarios = {}
+brain4cars_scenarios = {}
 
-# --- MAIN PROCESSING ---
-if driver_image and road_image:
+if os.path.exists(DASHGAZE_DIR):
+    dashgaze_scenarios = find_test_scenarios(DASHGAZE_DIR, "")
+
+if os.path.exists(BRAIN4CARS_DIR):
+    brain4cars_scenarios = find_test_scenarios(BRAIN4CARS_DIR, "")
+
+# --- Create Tabs ---
+tab1, tab2, tab3 = st.tabs(["📹 DashGaze Dataset", "🚗 Brain4Cars Dataset", "📤 Upload Custom"])
+
+def process_and_display(driver_image, road_image, camera_image, ground_truth, show_images, show_details):
+    """Process images and display results."""
+    # Placeholder for status (will be filled after processing)
+    status_placeholder = st.empty()
+    
     # Process gaze
     raw_pitch, raw_yaw = models["gaze"].predict_gaze(driver_image)
     pred_pitch = raw_pitch
@@ -196,6 +197,7 @@ if driver_image and road_image:
             st.metric("🚦 Road Objects", "None", delta="Clear road")
     
     with col_m3:
+        # Show model accuracy if ground truth available, otherwise show maneuver type
         if gt_azimuth_deg is not None:
             error_yaw = abs(np.rad2deg(pred_yaw) - gt_azimuth_deg)
             error_pitch = abs(np.rad2deg(pred_pitch) - gt_elevation_deg)
@@ -203,8 +205,20 @@ if driver_image and road_image:
             st.metric("📊 Model Accuracy", f"{avg_error:.1f}° error", 
                      delta=f"Pitch: {error_pitch:.1f}°, Yaw: {error_yaw:.1f}°")
         else:
-            st.metric("📊 Gaze Angles", f"P: {np.rad2deg(pred_pitch):.1f}°", 
-                     delta=f"Y: {np.rad2deg(pred_yaw):.1f}°")
+            # For Brain4Cars, show maneuver type instead
+            maneuver_type = ground_truth.get('maneuver', 'Unknown')
+            if maneuver_type != 'Unknown':
+                maneuver_display = {
+                    'lchange': '⬅️ Left Lane Change',
+                    'rchange': '➡️ Right Lane Change',
+                    'lturn': '↰ Left Turn',
+                    'rturn': '↱ Right Turn',
+                    'end_action': '⬆️ Straight'
+                }.get(maneuver_type, maneuver_type)
+                st.metric("🎯 Maneuver", maneuver_display)
+            else:
+                st.metric("📊 Gaze Angles", f"P: {np.rad2deg(pred_pitch):.1f}°", 
+                         delta=f"Y: {np.rad2deg(pred_yaw):.1f}°")
 
     # --- CAMERA FEEDS (OPTIONAL) ---
     if show_images:
@@ -246,7 +260,9 @@ if driver_image and road_image:
                     st.write(f"Pitch Error: {error_pitch:.2f}°")
                     st.write(f"Yaw Error: {error_yaw:.2f}°")
                 else:
-                    st.write("No ground truth available")
+                    maneuver_type = ground_truth.get('maneuver', 'N/A')
+                    st.write(f"Maneuver: {maneuver_type}")
+                    st.write("No gaze ground truth")
             
             with col_t3:
                 st.markdown("**Road Context**")
@@ -273,18 +289,66 @@ if driver_image and road_image:
             - Down (Phone/Lap): ±12° yaw, 8-20° pitch
             """)
 
-    else:
-    # No data loaded
-        st.info("👆 Select a test scenario from the sidebar or upload your own images")
+# --- TAB 1: DashGaze Dataset ---
+with tab1:
+    st.markdown("### 📹 DashGaze Test Scenarios")
+    st.markdown("DashGaze dataset with ground truth gaze annotations for accuracy evaluation")
     
-    col_i1, col_i2, col_i3 = st.columns(3)
-    with col_i1:
-        st.markdown("### 👁️ Gaze Tracking")
-        st.write("Monitors where the driver is looking")
-    with col_i2:
-        st.markdown("### 🚦 Object Detection")
-        st.write("Identifies vehicles, pedestrians, and signs")
-    with col_i3:
-        st.markdown("### 🧠 Fusion Engine")
-        st.write("Combines gaze + road context for alerts")
+    if dashgaze_scenarios:
+        scenario_keys = list(dashgaze_scenarios.keys())
+        selected_scenario = st.selectbox("Select DashGaze Scenario", scenario_keys, key="dashgaze_select")
+        
+        if selected_scenario:
+            driver_path, road_path, camera_path, gt_path = dashgaze_scenarios[selected_scenario]
+            driver_image = Image.open(driver_path)
+            road_image = Image.open(road_path)
+            camera_image = Image.open(camera_path) if os.path.exists(camera_path) else None
+            with open(gt_path, 'r') as f:
+                ground_truth = json.load(f)
+            
+            process_and_display(driver_image, road_image, camera_image, ground_truth, show_images, show_details)
+    else:
+        st.warning("⚠️ No DashGaze scenarios found. Please run preprocessing first.")
+        st.code("python scripts/preprocess_dashgaze.py")
 
+# --- TAB 2: Brain4Cars Dataset ---
+with tab2:
+    st.markdown("### 🚗 Brain4Cars Test Scenarios")
+    st.markdown("Brain4Cars dataset with driving maneuver annotations (lane changes, turns, straight driving)")
+    
+    if brain4cars_scenarios:
+        scenario_keys = list(brain4cars_scenarios.keys())
+        selected_scenario = st.selectbox("Select Brain4Cars Scenario", scenario_keys, key="brain4cars_select")
+        
+        if selected_scenario:
+            driver_path, road_path, camera_path, gt_path = brain4cars_scenarios[selected_scenario]
+            driver_image = Image.open(driver_path)
+            road_image = Image.open(road_path)
+            camera_image = Image.open(camera_path) if os.path.exists(camera_path) else None
+            with open(gt_path, 'r') as f:
+                ground_truth = json.load(f)
+            
+            process_and_display(driver_image, road_image, camera_image, ground_truth, show_images, show_details)
+    else:
+        st.warning("⚠️ No Brain4Cars scenarios found. Please run preprocessing first.")
+        st.code("python scripts/preprocess_brain4cars.py")
+
+# --- TAB 3: Upload Custom ---
+with tab3:
+    st.markdown("### 📤 Upload Your Own Images")
+    st.markdown("Upload a driver face image and road view image for custom testing")
+    
+    col_upload1, col_upload2 = st.columns(2)
+    
+    with col_upload1:
+        driver_file = st.file_uploader("Driver Face Image", type=["jpg", "jpeg", "png"], key="driver")
+    
+    with col_upload2:
+        road_file = st.file_uploader("Road View Image", type=["jpg", "jpeg", "png"], key="road")
+    
+    if driver_file and road_file:
+        driver_image = Image.open(driver_file)
+        road_image = Image.open(road_file)
+        ground_truth = {}  # No ground truth for custom uploads
+        
+        process_and_display(driver_image, road_image, None, ground_truth, show_images, show_details)
