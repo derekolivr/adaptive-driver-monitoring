@@ -33,10 +33,17 @@ class GazeTracker:
             transforms.ToTensor(),
         ])
 
-    def predict_gaze(self, face_image: Image.Image):
+    def predict_gaze(self, face_image: Image.Image, apply_calibration=True):
         """
         Predicts the gaze angles (pitch and yaw) from a PIL Image of a cropped face.
-        Returns calibrated angles in radians.
+        
+        Args:
+            face_image: PIL Image of a cropped face
+            apply_calibration: If True, applies DashGaze-specific calibration.
+                             Set to False for other datasets like Brain4Cars.
+        
+        Returns:
+            Tuple of (pitch, yaw) in radians
         """
         face_image = face_image.convert("RGB")
         image_tensor = self.transform(face_image).unsqueeze(0).to(self.device)
@@ -46,16 +53,32 @@ class GazeTracker:
         
         raw_pitch, raw_yaw = output.cpu().numpy()[0]
         
-        # Apply linear calibration (computed from gaze_calibration.json)
-        # This maps MpiiFaceGaze outputs to DashGaze coordinate system
-        raw_pitch_deg = np.rad2deg(raw_pitch)
-        raw_yaw_deg = np.rad2deg(raw_yaw)
+        # Debug: Print raw model outputs (uncomment to debug)
+        # print(f"Raw model output - Pitch: {raw_pitch:.6f} rad ({np.rad2deg(raw_pitch):.2f}°), Yaw: {raw_yaw:.6f} rad ({np.rad2deg(raw_yaw):.2f}°)")
         
-        calibrated_pitch_deg = 0.2550 * raw_pitch_deg + 8.4552
-        calibrated_yaw_deg = 0.2396 * raw_yaw_deg + 1.6353
-        
-        # Convert back to radians
-        pitch = np.deg2rad(calibrated_pitch_deg)
-        yaw = np.deg2rad(calibrated_yaw_deg)
+        if apply_calibration:
+            # Apply linear calibration (computed from gaze_calibration.json)
+            # This maps MpiiFaceGaze outputs to DashGaze coordinate system
+            raw_pitch_deg = np.rad2deg(raw_pitch)
+            raw_yaw_deg = np.rad2deg(raw_yaw)
+            
+            calibrated_pitch_deg = 0.2550 * raw_pitch_deg + 8.4552
+            calibrated_yaw_deg = 0.2396 * raw_yaw_deg + 1.6353
+            
+            # Convert back to radians
+            pitch = np.deg2rad(calibrated_pitch_deg)
+            yaw = np.deg2rad(calibrated_yaw_deg)
+        else:
+            # For Brain4Cars: The model was trained on MPIIGaze which has different camera setup
+            # We need to use raw outputs but may need to scale/invert based on actual behavior
+            # For now, use raw values directly - if they're clustered, it's likely a model limitation
+            # or the model needs retraining/fine-tuning on Brain4Cars data
+            
+            # Use raw model outputs directly
+            pitch = raw_pitch
+            yaw = raw_yaw
+            
+            # If values are consistently clustered, it suggests the model outputs
+            # don't vary much, which could be a model limitation for this dataset
         
         return pitch, yaw

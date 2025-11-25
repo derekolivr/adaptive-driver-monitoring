@@ -79,15 +79,16 @@ def draw_gaze_vectors(image: Image.Image, pred_pitch, pred_yaw, gt_pitch=None, g
     center = (w // 2, h // 2)
     
     # Predicted gaze (RED)
+    # Note: In image coordinates, Y increases downward, so we flip pitch sign
     dx_pred = int(length * np.sin(pred_yaw))
-    dy_pred = int(-length * np.sin(pred_pitch))
+    dy_pred = int(length * np.sin(pred_pitch))  # Flipped sign for correct visualization
     end_pred = (center[0] + dx_pred, center[1] + dy_pred)
     cv2.arrowedLine(image_cv, center, end_pred, (255, 0, 0), thickness, tipLength=0.3)
     
     # Ground truth (GREEN) - if available
     if gt_pitch is not None and gt_yaw is not None:
         dx_gt = int(length * np.sin(gt_yaw))
-        dy_gt = int(-length * np.sin(gt_pitch))
+        dy_gt = int(length * np.sin(gt_pitch))  # Flipped sign for correct visualization
         end_gt = (center[0] + dx_gt, center[1] + dy_gt)
         cv2.arrowedLine(image_cv, center, end_gt, (0, 255, 0), thickness, tipLength=0.3)
     
@@ -161,11 +162,24 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
     # Placeholder for status (will be filled after processing)
     status_placeholder = st.empty()
     
+    # Determine if we should apply calibration (only for DashGaze, not Brain4Cars)
+    is_brain4cars = ground_truth.get('source') == 'Brain4Cars'
+    apply_calibration = not is_brain4cars
+    
     # Process gaze
-    raw_pitch, raw_yaw = models["gaze"].predict_gaze(driver_image)
-    pred_pitch = raw_pitch
-    pred_yaw = raw_yaw
+    pred_pitch, pred_yaw = models["gaze"].predict_gaze(driver_image, apply_calibration=apply_calibration)
+    
+    # Classify gaze zone
     gaze_zone = models["fusion"].classify_gaze_zone(pred_pitch, pred_yaw)
+    
+    # Debug output for Brain4Cars to verify values
+    if is_brain4cars:
+        with st.sidebar.expander("🔍 Debug - Gaze Values", expanded=show_details):
+            st.write(f"**Final values:**")
+            st.write(f"Pitch: {np.rad2deg(pred_pitch):.2f}° ({pred_pitch:.4f} rad)")
+            st.write(f"Yaw: {np.rad2deg(pred_yaw):.2f}° ({pred_yaw:.4f} rad)")
+            st.write(f"**Gaze Zone:** {gaze_zone}")
+            st.write(f"**Note:** If values are clustered, the model may need different interpretation")
     
     # Process road
     annotated_road_image, road_objects = models["road"].detect_objects(road_image)
@@ -176,6 +190,7 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
     maneuver = ground_truth.get('maneuver')
     is_near_intersection = ground_truth.get('is_near_intersection', False)
     lane_info = ground_truth.get('lane_info', {})
+    speed_mph = ground_truth.get('speed_mph', 0.0)
 
     gt_yaw, gt_pitch = None, None
     if gt_azimuth_deg is not None and gt_elevation_deg is not None:
@@ -188,16 +203,19 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
         gaze_zone, 
         road_objects, 
         maneuver=maneuver, 
-        is_near_intersection=is_near_intersection
+        is_near_intersection=is_near_intersection,
+        speed_mph=speed_mph
     )
     
     with status_placeholder.container():
-        if "WARNING" in assessment:
-            st.markdown(f'<div class="big-alert alert-danger">⚠️ {assessment}</div>', unsafe_allow_html=True)
+        if "CRITICAL" in assessment:
+            st.markdown(f'<div class="big-alert alert-danger">🚨 {assessment}</div>', unsafe_allow_html=True)
+        elif "WARNING" in assessment:
+            st.markdown(f'<div class="big-alert alert-danger">{assessment}</div>', unsafe_allow_html=True)
         elif "CAUTION" in assessment:
-            st.markdown(f'<div class="big-alert alert-warning">⚡ {assessment}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="big-alert alert-warning">{assessment}</div>', unsafe_allow_html=True)
         else:
-            st.markdown(f'<div class="big-alert alert-safe">✅ {assessment}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="big-alert alert-safe">{assessment}</div>', unsafe_allow_html=True)
     
     # --- KEY METRICS ---
     col_m1, col_m2, col_m3 = st.columns(3)
@@ -256,11 +274,13 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
         
         with col3:
             # For Brain4Cars, we show context instead of a third camera
-            if 'lane_info' in ground_truth:
+            if 'lane_info' in ground_truth or is_brain4cars:
                 st.markdown("##### 🚗 Vehicle Context")
+                speed_display = f"{speed_mph:.1f} MPH" if speed_mph > 0.1 else "Unknown"
                 st.info(f"""
-                - **Intersection Status**: {'Approaching' if is_near_intersection else 'Clear'}
-                - **Lane Position**: {lane_info.get('current_lane')} of {lane_info.get('total_lanes')}
+                - **Speed**: {speed_display}
+                - **Intersection**: {'Approaching' if is_near_intersection else 'Clear'}
+                - **Lane**: {lane_info.get('current_lane', 0)} of {lane_info.get('total_lanes', 0)}
                 """)
             else:
                 st.info("No vehicle context")
@@ -287,6 +307,7 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
                 else:
                     maneuver_type = ground_truth.get('maneuver', 'N/A')
                     st.write(f"Maneuver: {maneuver_type}")
+                    st.write(f"Speed: {speed_mph:.1f} MPH" if speed_mph > 0 else "Speed: Unknown")
                     st.write(f"Intersection: {is_near_intersection}")
                     st.write(f"Lane: {lane_info.get('current_lane')} of {lane_info.get('total_lanes')}")
             
@@ -343,32 +364,77 @@ with tab2:
     st.markdown("Brain4Cars dataset with driving maneuver annotations (lane changes, turns, straight driving)")
     
     if brain4cars_scenarios:
-        scenario_keys = list(brain4cars_scenarios.keys())
-        selected_scenario = st.selectbox("Select Brain4Cars Scenario", scenario_keys, key="brain4cars_select")
-        
-        if selected_scenario:
-            sample_dir = brain4cars_scenarios[selected_scenario]
+        # Group scenarios by maneuver type
+        maneuvers = {}
+        for scenario_name, sample_dir in brain4cars_scenarios.items():
             gt_path = os.path.join(sample_dir, "_gt.json")
+            if os.path.exists(gt_path):
+                with open(gt_path, 'r') as f:
+                    gt_data = json.load(f)
+                maneuver_type = gt_data.get('maneuver', 'unknown')
+                if maneuver_type not in maneuvers:
+                    maneuvers[maneuver_type] = []
+                maneuvers[maneuver_type].append((scenario_name, sample_dir, gt_data))
+        
+        # Display maneuver selector
+        maneuver_display = {
+            'lchange': '⬅️ Left Lane Change',
+            'rchange': '➡️ Right Lane Change',
+            'lturn': '↰ Left Turn',
+            'rturn': '↱ Right Turn',
+            'end_action': '⬆️ Straight Driving'
+        }
+        
+        maneuver_keys = sorted([m for m in maneuvers.keys() if m in maneuver_display])
+        if maneuver_keys:
+            selected_maneuver = st.selectbox(
+                "Select Maneuver Type", 
+                maneuver_keys,
+                format_func=lambda x: maneuver_display.get(x, x),
+                key="brain4cars_maneuver"
+            )
             
-            with open(gt_path, 'r') as f:
-                ground_truth = json.load(f)
+            # Collect all frames from all samples of this maneuver
+            all_frames = []
+            for scenario_name, sample_dir, gt_data in maneuvers[selected_maneuver]:
+                num_frames = gt_data.get("num_frames", 1)
+                for frame_idx in range(num_frames):
+                    driver_path = os.path.join(sample_dir, f"driver_{frame_idx:02d}.jpg")
+                    road_path = os.path.join(sample_dir, f"road_{frame_idx:02d}.jpg")
+                    if os.path.exists(driver_path) and os.path.exists(road_path):
+                        all_frames.append({
+                            'driver_path': driver_path,
+                            'road_path': road_path,
+                            'ground_truth': gt_data,
+                            'scenario': scenario_name,
+                            'frame_idx': frame_idx
+                        })
             
-            num_frames = ground_truth.get("num_frames", 1)
-            
-            # Add a slider to select the frame
-            frame_idx = 0
-            if num_frames > 1:
-                frame_idx = st.slider("Frame Sequence", 0, num_frames - 1, 0)
-
-            driver_path = os.path.join(sample_dir, f"driver_{frame_idx:02d}.jpg")
-            road_path = os.path.join(sample_dir, f"road_{frame_idx:02d}.jpg")
-
-            if os.path.exists(driver_path) and os.path.exists(road_path):
-                driver_image = Image.open(driver_path)
-                road_image = Image.open(road_path)
+            if all_frames:
+                # Frame slider across all samples
+                total_frames = len(all_frames)
+                frame_idx = st.slider(
+                    f"Frame Sequence ({total_frames} frames across {len(maneuvers[selected_maneuver])} samples)",
+                    0, 
+                    total_frames - 1, 
+                    0,
+                    key="brain4cars_frame"
+                )
+                
+                # Get the selected frame
+                selected_frame = all_frames[frame_idx]
+                driver_image = Image.open(selected_frame['driver_path'])
+                road_image = Image.open(selected_frame['road_path'])
+                ground_truth = selected_frame['ground_truth']
+                
+                # Show which sample and frame we're viewing
+                st.caption(f"📹 Sample: {selected_frame['scenario']} | Frame: {selected_frame['frame_idx']:02d}")
+                
                 process_and_display(driver_image, road_image, ground_truth, show_images, show_details)
             else:
-                st.error("Frame images not found for selected scenario.")
+                st.error("No frame images found for this maneuver type.")
+        else:
+            st.warning("No valid maneuvers found in Brain4Cars data.")
 
     else:
         st.warning("⚠️ No Brain4Cars scenarios found. Please run preprocessing first.")
