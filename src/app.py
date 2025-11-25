@@ -39,8 +39,8 @@ st.markdown("""
     }
     
     .alert-warning {
-        background-color: #ffaa00;
-        color: white;
+        background-color: #ffd700;
+        color: #000000;
     }
     
     .alert-safe {
@@ -189,8 +189,6 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
     gt_elevation_deg = ground_truth.get('elevation_deg')
     maneuver = ground_truth.get('maneuver')
     is_near_intersection = ground_truth.get('is_near_intersection', False)
-    lane_info = ground_truth.get('lane_info', {})
-    speed_mph = ground_truth.get('speed_mph', 0.0)
 
     gt_yaw, gt_pitch = None, None
     if gt_azimuth_deg is not None and gt_elevation_deg is not None:
@@ -203,16 +201,11 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
         gaze_zone, 
         road_objects, 
         maneuver=maneuver, 
-        is_near_intersection=is_near_intersection,
-        speed_mph=speed_mph
+        is_near_intersection=is_near_intersection
     )
     
     with status_placeholder.container():
-        if "CRITICAL" in assessment:
-            st.markdown(f'<div class="big-alert alert-danger">🚨 {assessment}</div>', unsafe_allow_html=True)
-        elif "WARNING" in assessment:
-            st.markdown(f'<div class="big-alert alert-danger">{assessment}</div>', unsafe_allow_html=True)
-        elif "CAUTION" in assessment:
+        if "CAUTION" in assessment:
             st.markdown(f'<div class="big-alert alert-warning">{assessment}</div>', unsafe_allow_html=True)
         else:
             st.markdown(f'<div class="big-alert alert-safe">{assessment}</div>', unsafe_allow_html=True)
@@ -273,17 +266,21 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
             st.image(annotated_road_image, caption="Road View", use_container_width=True)
         
         with col3:
-            # For Brain4Cars, we show context instead of a third camera
-            if 'lane_info' in ground_truth or is_brain4cars:
-                st.markdown("##### 🚗 Vehicle Context")
-                speed_display = f"{speed_mph:.1f} MPH" if speed_mph > 0.1 else "Unknown"
-                st.info(f"""
-                - **Speed**: {speed_display}
-                - **Intersection**: {'Approaching' if is_near_intersection else 'Clear'}
-                - **Lane**: {lane_info.get('current_lane', 0)} of {lane_info.get('total_lanes', 0)}
-                """)
-            else:
-                st.info("No vehicle context")
+            # Vehicle Context section
+            st.markdown("##### 🚗 Vehicle Context")
+            lane_info = ground_truth.get('lane_info', {})
+            
+            # Create a styled info box
+            intersection_status = "Clear" if not is_near_intersection else "Approaching"
+            current_lane = lane_info.get('current_lane', 0)
+            total_lanes = lane_info.get('total_lanes', 0)
+            
+            st.markdown(f"""
+            <div style="background-color: #1e3a5f; padding: 1rem; border-radius: 0.5rem; color: #4db8ff;">
+                <p style="margin: 0.5rem 0;"><strong>• Intersection Status:</strong> {intersection_status}</p>
+                <p style="margin: 0.5rem 0;"><strong>• Lane Position:</strong> {current_lane} of {total_lanes}</p>
+            </div>
+            """, unsafe_allow_html=True)
     
     # --- TECHNICAL DETAILS (COLLAPSIBLE) ---
     if show_details:
@@ -307,9 +304,7 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
                 else:
                     maneuver_type = ground_truth.get('maneuver', 'N/A')
                     st.write(f"Maneuver: {maneuver_type}")
-                    st.write(f"Speed: {speed_mph:.1f} MPH" if speed_mph > 0 else "Speed: Unknown")
                     st.write(f"Intersection: {is_near_intersection}")
-                    st.write(f"Lane: {lane_info.get('current_lane')} of {lane_info.get('total_lanes')}")
             
             with col_t3:
                 st.markdown("**Road Context**")

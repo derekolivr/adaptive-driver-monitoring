@@ -69,16 +69,12 @@ class GazeTracker:
             pitch = np.deg2rad(calibrated_pitch_deg)
             yaw = np.deg2rad(calibrated_yaw_deg)
         else:
-            # For Brain4Cars: The model was trained on MPIIGaze which has different camera setup
-            # We need to use raw outputs but may need to scale/invert based on actual behavior
-            # For now, use raw values directly - if they're clustered, it's likely a model limitation
-            # or the model needs retraining/fine-tuning on Brain4Cars data
+            # For Brain4Cars: Apply multiplier to amplify variation in model outputs
+            # The model outputs are clustered, so we multiply to get more variation
+            # This is a heuristic to make the gaze predictions more responsive
+            multiplier = 3.0  # Amplify the variation
             
-            # Use raw model outputs directly
-            pitch = raw_pitch
-            yaw = raw_yaw
-            
-            # If values are consistently clustered, it suggests the model outputs
-            # don't vary much, which could be a model limitation for this dataset
+            pitch = raw_pitch * multiplier
+            yaw = raw_yaw * multiplier
         
         return pitch, yaw

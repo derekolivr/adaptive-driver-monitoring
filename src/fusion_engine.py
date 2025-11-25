@@ -32,7 +32,7 @@ class FusionEngine:
         
         return "Looking Elsewhere"
 
-    def assess_driver_state(self, gaze_zone, road_objects, maneuver=None, is_near_intersection=False, speed_mph=0):
+    def assess_driver_state(self, gaze_zone, road_objects, maneuver=None, is_near_intersection=False):
         """
         Provides a high-level assessment of the driver's state based on gaze and road context.
         
@@ -41,48 +41,58 @@ class FusionEngine:
             road_objects (list): A list of detected objects on the road.
             maneuver (str, optional): The current driving maneuver (e.g., 'lchange').
             is_near_intersection (bool, optional): True if the vehicle is near an intersection.
-            speed_mph (float, optional): Vehicle speed in miles per hour.
         """
         # --- Rule-based assessment using integrated context ---
+        # Yellow (CAUTION) range is wider, Red (WARNING/CRITICAL) is smaller
         
-        # Rule 1: CRITICAL - Looking down at phone/lap is always dangerous
+        # Rule 1: All distractions are CAUTION (yellow), no red warnings
         if gaze_zone in ["Down (Phone/Lap)", "Center Console/Radio"]:
-            if "person" in road_objects:
-                return f"⚠️ CRITICAL: Driver looking at {gaze_zone} with pedestrian present!"
-            if speed_mph > 25:
-                return f"⚠️ CRITICAL: Driver distracted by {gaze_zone} at {speed_mph:.0f} MPH!"
+            # Intersections are CAUTION (yellow)
             if is_near_intersection:
-                return f"⚠️ CRITICAL: Driver looking at {gaze_zone} near intersection!"
-            return f"⚠️ WARNING: Driver distracted by {gaze_zone}!"
+                return f"⚠️ CAUTION: Driver looking at {gaze_zone} near intersection."
+            # Pedestrians are CAUTION (yellow)
+            if "person" in road_objects:
+                return f"⚠️ CAUTION: Driver looking at {gaze_zone} with pedestrian present."
+            # Normal distraction - just note it, not a warning
+            return f"Driver checking {gaze_zone}."
         
-        # Rule 2: High-priority warning for completely off-road gaze
+        # Rule 2: Off-road gaze - all CAUTION (yellow)
         if gaze_zone == "Looking Elsewhere":
-            if speed_mph > 15:
-                return f"⚠️ CRITICAL: Driver's gaze significantly off-road at {speed_mph:.0f} MPH!"
-            return "⚠️ WARNING: Driver's gaze is significantly off-road!"
-
-        # Rule 3: Context-dependent severe warnings
-        is_high_risk_context = is_near_intersection or "person" in road_objects or len(road_objects) > 2
-        if gaze_zone not in ["Road Ahead", "Left Mirror/Window", "Right Mirror/Window", "Rear-view Mirror"] and is_high_risk_context:
-            if "person" in road_objects:
-                return f"⚠️ CRITICAL: Driver not watching pedestrian! Looking at {gaze_zone}!"
+            # Intersections are CAUTION (yellow)
             if is_near_intersection:
-                return f"⚠️ WARNING: Driver looking at {gaze_zone} near intersection!"
-            return f"⚠️ WARNING: Driver looking at {gaze_zone} in complex traffic!"
+                return "⚠️ CAUTION: Driver's gaze off-road near intersection."
+            # Pedestrians are CAUTION (yellow)
+            if "person" in road_objects:
+                return "⚠️ CAUTION: Driver's gaze off-road with pedestrian present."
+            # Normal off-road glance - always CAUTION
+            return "⚠️ CAUTION: Driver's gaze is significantly off-road."
 
-        # Rule 4: Safe, expected behavior during maneuvers (ONLY for appropriate mirror checks)
-        if maneuver == 'lchange' and gaze_zone == "Left Mirror/Window":
-            return "✓ Driver safely checking left mirror for lane change."
-        if maneuver == 'rchange' and gaze_zone == "Right Mirror/Window":
-            return "✓ Driver safely checking right mirror for lane change."
+        # Rule 3: Context-dependent - all CAUTION (yellow), no red
+        # Only trigger for clearly distracting zones, not mirrors or safe zones
+        distracting_zones = ["Down (Phone/Lap)", "Center Console/Radio", "Looking Elsewhere"]
+        if gaze_zone in distracting_zones:
+            # This is already handled by Rules 1 and 2, so skip
+            pass
+        elif gaze_zone not in ["Road Ahead", "Left Mirror/Window", "Right Mirror/Window", "Rear-view Mirror"]:
+            # Other zones - all CAUTION (yellow)
+            if is_near_intersection:
+                return f"⚠️ CAUTION: Driver looking at {gaze_zone} near intersection."
+            if "person" in road_objects:
+                return f"⚠️ CAUTION: Driver looking at {gaze_zone} with pedestrian present."
+            # For other zones, just note it without warning
+            return f"Driver looking at {gaze_zone}."
+
+        # Rule 4: Safe, expected behavior during maneuvers
+        if maneuver == 'lchange' and gaze_zone in ["Left Mirror/Window", "Rear-view Mirror"]:
+            return "✓ Driver safely checking mirrors for lane change."
+        if maneuver == 'rchange' and gaze_zone in ["Right Mirror/Window", "Rear-view Mirror"]:
+            return "✓ Driver safely checking mirrors for lane change."
         if maneuver in ['lturn', 'rturn'] and gaze_zone in ["Left Mirror/Window", "Right Mirror/Window", "Rear-view Mirror"]:
              return f"✓ Driver checking surroundings for turn."
 
-        # Rule 5: Speed-dependent warnings for mirror checks (when NOT during expected maneuver)
+        # Rule 5: Mirror checks
         if gaze_zone in ["Left Mirror/Window", "Right Mirror/Window", "Rear-view Mirror"]:
-            if speed_mph > 50 and not maneuver:
-                return f"⚠️ CAUTION: Extended mirror check at high speed ({speed_mph:.0f} MPH)."
-            return f"Driver checking mirrors (speed: {speed_mph:.0f} MPH)."
+            return "✓ Driver checking mirrors."
 
         # Rule 6: Driver is looking ahead - provide context summary
         if "person" in road_objects:
@@ -92,7 +102,4 @@ class FusionEngine:
             unique_objects = ', '.join(set(road_objects))
             return f"✓ Driver focused on road. Detected: {unique_objects}."
 
-        if speed_mph > 0:
-            return f"✓ Driver focused on road ahead ({speed_mph:.0f} MPH)."
-        
         return "✓ Driver is focused on the road ahead."
