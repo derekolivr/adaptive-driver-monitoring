@@ -32,7 +32,7 @@ class FusionEngine:
         
         return "Looking Elsewhere"
 
-    def assess_driver_state(self, gaze_zone, road_objects, maneuver=None, speed_mph=0, is_near_intersection=False):
+    def assess_driver_state(self, gaze_zone, road_objects, maneuver=None, is_near_intersection=False):
         """
         Provides a high-level assessment of the driver's state based on gaze and road context.
         
@@ -40,7 +40,6 @@ class FusionEngine:
             gaze_zone (str): The classified gaze zone of the driver.
             road_objects (list): A list of detected objects on the road.
             maneuver (str, optional): The current driving maneuver (e.g., 'lchange').
-            speed_mph (float, optional): The vehicle's current speed in MPH.
             is_near_intersection (bool, optional): True if the vehicle is near an intersection.
         """
         # --- Rule-based assessment using integrated context ---
@@ -60,11 +59,7 @@ class FusionEngine:
 
         # Rule 3: General off-road gaze warnings
         if gaze_zone not in ["Road Ahead"]:
-            # Increase severity based on speed
-            if speed_mph > 30:
-                 return f"WARNING: Driver looking at {gaze_zone} at high speed ({speed_mph:.0f} mph)!"
-            else:
-                 return f"CAUTION: Driver is looking at {gaze_zone} instead of the road."
+            return f"CAUTION: Driver is looking at {gaze_zone} instead of the road."
 
         # Rule 4: Driver is looking ahead, provide context summary
         if "person" in road_objects:

@@ -5,6 +5,7 @@ import cv2
 import os
 import glob
 import json
+from typing import Dict
 
 # Import the modules we created
 from gaze_tracker import GazeTracker
@@ -71,7 +72,7 @@ def load_models():
     return models
 
 # --- Visualization ---
-def draw_gaze_vectors(image: Image.Image, pred_pitch, pred_yaw, gt_pitch=None, gt_yaw=None, length=150, thickness=3):
+def draw_gaze_vectors(image: Image.Image, pred_pitch, pred_yaw, gt_pitch=None, gt_yaw=None, length=200, thickness=5):
     """Draw gaze direction vectors on the face image."""
     image_cv = np.array(image.copy())
     h, w = image_cv.shape[:2]
@@ -93,17 +94,28 @@ def draw_gaze_vectors(image: Image.Image, pred_pitch, pred_yaw, gt_pitch=None, g
     return Image.fromarray(image_cv)
 
 # --- Helper to find test scenarios ---
-def find_test_scenarios(data_dir, dataset_label=""):
-    """Find test scenarios in a data directory.
-    
-    Args:
-        data_dir: Directory containing processed test data
-        dataset_label: Optional label to prefix scenario names (e.g., "DashGaze", "Brain4Cars")
-    
-    Returns:
-        Dictionary mapping scenario names to (driver_path, road_path, camera_path, gt_path)
-    """
+def find_brain4cars_scenarios(data_dir: str) -> Dict:
+    """Finds Brain4Cars scenarios, which are organized as directories of frames."""
     scenarios = {}
+    if not os.path.exists(data_dir):
+        return scenarios
+        
+    sample_dirs = sorted([d for d in glob.glob(os.path.join(data_dir, "*/")) if os.path.isdir(d)])
+    
+    for sample_dir in sample_dirs:
+        gt_path = os.path.join(sample_dir, "_gt.json")
+        if os.path.exists(gt_path):
+            base_name = os.path.basename(os.path.normpath(sample_dir))
+            scenarios[base_name] = sample_dir
+            
+    return scenarios
+
+def find_dashgaze_scenarios(data_dir: str) -> Dict:
+    """Finds DashGaze scenarios, which are organized as individual image files."""
+    scenarios = {}
+    if not os.path.exists(data_dir):
+        return scenarios
+
     gt_files = sorted(glob.glob(os.path.join(data_dir, "*_gt.json")))
     for gt_path in gt_files:
         base_name = os.path.basename(gt_path).replace("_gt.json", "")
@@ -111,12 +123,10 @@ def find_test_scenarios(data_dir, dataset_label=""):
         road_path = os.path.join(data_dir, f"{base_name}_road.jpg")
         camera_path = os.path.join(data_dir, f"{base_name}_camera.jpg")
         if os.path.exists(driver_path) and os.path.exists(road_path):
-            if dataset_label:
-                scenario_name = f"[{dataset_label}] {base_name}"
-            else:
-                scenario_name = f"{base_name}"
-            scenarios[scenario_name] = (driver_path, road_path, camera_path, gt_path)
+            scenarios[base_name] = (driver_path, road_path, camera_path, gt_path)
+            
     return scenarios
+
 
 # --- Load models first (before any UI) ---
 models = load_models()
@@ -138,15 +148,15 @@ dashgaze_scenarios = {}
 brain4cars_scenarios = {}
 
 if os.path.exists(DASHGAZE_DIR):
-    dashgaze_scenarios = find_test_scenarios(DASHGAZE_DIR, "")
+    dashgaze_scenarios = find_dashgaze_scenarios(DASHGAZE_DIR)
 
 if os.path.exists(BRAIN4CARS_DIR):
-    brain4cars_scenarios = find_test_scenarios(BRAIN4CARS_DIR, "")
+    brain4cars_scenarios = find_brain4cars_scenarios(BRAIN4CARS_DIR)
 
 # --- Create Tabs ---
 tab1, tab2, tab3 = st.tabs(["📹 DashGaze Dataset", "🚗 Brain4Cars Dataset", "📤 Upload Custom"])
 
-def process_and_display(driver_image, road_image, camera_image, ground_truth, show_images, show_details):
+def process_and_display(driver_image, road_image, ground_truth, show_images, show_details):
     """Process images and display results."""
     # Placeholder for status (will be filled after processing)
     status_placeholder = st.empty()
@@ -160,9 +170,13 @@ def process_and_display(driver_image, road_image, camera_image, ground_truth, sh
     # Process road
     annotated_road_image, road_objects = models["road"].detect_objects(road_image)
         
-    # Get ground truth
+    # Get ground truth and Brain4Cars context
     gt_azimuth_deg = ground_truth.get('azimuth_deg')
     gt_elevation_deg = ground_truth.get('elevation_deg')
+    maneuver = ground_truth.get('maneuver')
+    is_near_intersection = ground_truth.get('is_near_intersection', False)
+    lane_info = ground_truth.get('lane_info', {})
+
     gt_yaw, gt_pitch = None, None
     if gt_azimuth_deg is not None and gt_elevation_deg is not None:
         gt_yaw = np.deg2rad(gt_azimuth_deg)
@@ -170,7 +184,12 @@ def process_and_display(driver_image, road_image, camera_image, ground_truth, sh
 
     # --- ALERT SECTION (Display at top using placeholder) ---
     # Determine alert level
-    assessment = models["fusion"].assess_driver_state(gaze_zone, road_objects)
+    assessment = models["fusion"].assess_driver_state(
+        gaze_zone, 
+        road_objects, 
+        maneuver=maneuver, 
+        is_near_intersection=is_near_intersection
+    )
     
     with status_placeholder.container():
         if "WARNING" in assessment:
@@ -209,13 +228,14 @@ def process_and_display(driver_image, road_image, camera_image, ground_truth, sh
             maneuver_type = ground_truth.get('maneuver', 'Unknown')
             if maneuver_type != 'Unknown':
                 maneuver_display = {
-                    'lchange': '⬅️ Left Lane Change',
-                    'rchange': '➡️ Right Lane Change',
+                    'lchange': '⬅️ Left Change',
+                    'rchange': '➡️ Right Change',
                     'lturn': '↰ Left Turn',
                     'rturn': '↱ Right Turn',
                     'end_action': '⬆️ Straight'
                 }.get(maneuver_type, maneuver_type)
-                st.metric("🎯 Maneuver", maneuver_display)
+                st.metric("🎯 Maneuver", maneuver_display, 
+                         delta="At Intersection" if is_near_intersection else "")
             else:
                 st.metric("📊 Gaze Angles", f"P: {np.rad2deg(pred_pitch):.1f}°", 
                          delta=f"Y: {np.rad2deg(pred_yaw):.1f}°")
@@ -235,10 +255,15 @@ def process_and_display(driver_image, road_image, camera_image, ground_truth, sh
             st.image(annotated_road_image, caption="Road View", use_container_width=True)
         
         with col3:
-            if camera_image:
-                st.image(camera_image, caption="Dashboard Camera", use_container_width=True)
+            # For Brain4Cars, we show context instead of a third camera
+            if 'lane_info' in ground_truth:
+                st.markdown("##### 🚗 Vehicle Context")
+                st.info(f"""
+                - **Intersection Status**: {'Approaching' if is_near_intersection else 'Clear'}
+                - **Lane Position**: {lane_info.get('current_lane')} of {lane_info.get('total_lanes')}
+                """)
             else:
-                st.info("No dashboard camera feed")
+                st.info("No vehicle context")
     
     # --- TECHNICAL DETAILS (COLLAPSIBLE) ---
     if show_details:
@@ -262,7 +287,8 @@ def process_and_display(driver_image, road_image, camera_image, ground_truth, sh
                 else:
                     maneuver_type = ground_truth.get('maneuver', 'N/A')
                     st.write(f"Maneuver: {maneuver_type}")
-                    st.write("No gaze ground truth")
+                    st.write(f"Intersection: {is_near_intersection}")
+                    st.write(f"Lane: {lane_info.get('current_lane')} of {lane_info.get('total_lanes')}")
             
             with col_t3:
                 st.markdown("**Road Context**")
@@ -299,14 +325,14 @@ with tab1:
         selected_scenario = st.selectbox("Select DashGaze Scenario", scenario_keys, key="dashgaze_select")
         
         if selected_scenario:
+            # DashGaze still uses single files
             driver_path, road_path, camera_path, gt_path = dashgaze_scenarios[selected_scenario]
             driver_image = Image.open(driver_path)
             road_image = Image.open(road_path)
-            camera_image = Image.open(camera_path) if os.path.exists(camera_path) else None
             with open(gt_path, 'r') as f:
                 ground_truth = json.load(f)
             
-            process_and_display(driver_image, road_image, camera_image, ground_truth, show_images, show_details)
+            process_and_display(driver_image, road_image, ground_truth, show_images, show_details)
     else:
         st.warning("⚠️ No DashGaze scenarios found. Please run preprocessing first.")
         st.code("python scripts/preprocess_dashgaze.py")
@@ -321,14 +347,29 @@ with tab2:
         selected_scenario = st.selectbox("Select Brain4Cars Scenario", scenario_keys, key="brain4cars_select")
         
         if selected_scenario:
-            driver_path, road_path, camera_path, gt_path = brain4cars_scenarios[selected_scenario]
-            driver_image = Image.open(driver_path)
-            road_image = Image.open(road_path)
-            camera_image = Image.open(camera_path) if os.path.exists(camera_path) else None
+            sample_dir = brain4cars_scenarios[selected_scenario]
+            gt_path = os.path.join(sample_dir, "_gt.json")
+            
             with open(gt_path, 'r') as f:
                 ground_truth = json.load(f)
             
-            process_and_display(driver_image, road_image, camera_image, ground_truth, show_images, show_details)
+            num_frames = ground_truth.get("num_frames", 1)
+            
+            # Add a slider to select the frame
+            frame_idx = 0
+            if num_frames > 1:
+                frame_idx = st.slider("Frame Sequence", 0, num_frames - 1, 0)
+
+            driver_path = os.path.join(sample_dir, f"driver_{frame_idx:02d}.jpg")
+            road_path = os.path.join(sample_dir, f"road_{frame_idx:02d}.jpg")
+
+            if os.path.exists(driver_path) and os.path.exists(road_path):
+                driver_image = Image.open(driver_path)
+                road_image = Image.open(road_path)
+                process_and_display(driver_image, road_image, ground_truth, show_images, show_details)
+            else:
+                st.error("Frame images not found for selected scenario.")
+
     else:
         st.warning("⚠️ No Brain4Cars scenarios found. Please run preprocessing first.")
         st.code("python scripts/preprocess_brain4cars.py")
@@ -351,4 +392,4 @@ with tab3:
         road_image = Image.open(road_file)
         ground_truth = {}  # No ground truth for custom uploads
         
-        process_and_display(driver_image, road_image, None, ground_truth, show_images, show_details)
+        process_and_display(driver_image, road_image, ground_truth, show_images, show_details)

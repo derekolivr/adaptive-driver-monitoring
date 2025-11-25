@@ -16,71 +16,49 @@ import argparse
 import scipy.io  # Import SciPy for .mat file handling
 
 
-def extract_middle_frame(video_path: str) -> Tuple[bool, any]:
-    """
-    Extract the middle frame from a video file.
-    
-    Args:
-        video_path: Path to the video file
-        
-    Returns:
-        Tuple of (success, frame)
-    """
+def extract_frame_sequence(video_path: str, num_frames: int = 10) -> List[any]:
+    """Extracts a sequence of frames from the middle of a video."""
+    frames = []
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        return False, None
+        return frames
     
-    # Get total frame count
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    if total_frames == 0:
+    if total_frames < num_frames:
         cap.release()
-        return False, None
+        return frames
+        
+    start_frame = (total_frames - num_frames) // 2
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
     
-    # Seek to middle frame
-    middle_frame_idx = total_frames // 2
-    cap.set(cv2.CAP_PROP_POS_FRAMES, middle_frame_idx)
-    
-    ret, frame = cap.read()
+    for _ in range(num_frames):
+        ret, frame = cap.read()
+        if ret:
+            frames.append(frame)
+        else:
+            break
+            
     cap.release()
-    
-    return ret, frame
+    return frames
 
 
-def extract_mat_data(mat_path: str, middle_frame_idx: int) -> Dict:
-    """Extracts contextual data from a .mat file for a specific frame."""
+def extract_mat_data(mat_path: str) -> Dict:
+    """Extracts contextual data from a .mat file."""
     try:
         mat_data = scipy.io.loadmat(mat_path)
-        
-        # Lane info: [current_lane, total_lanes, is_intersection]
         lane_info = mat_data.get('laneInfo', [[0, 0, 0]])[0]
-        
-        # Frame-specific data (speed)
-        frame_data = mat_data.get('frame_data')
-        speed = 0
-        if frame_data is not None and frame_data.shape[1] > middle_frame_idx:
-            # Access the struct for the middle frame
-            middle_frame_struct = frame_data[0, middle_frame_idx]
-            # Speed is usually the first element in the struct's data
-            if len(middle_frame_struct) > 0 and len(middle_frame_struct[0]) > 0:
-                 speed_data = middle_frame_struct[0][0]
-                 if 'speed' in speed_data.dtype.names:
-                    speed = speed_data['speed'][0][0]
-
-
         return {
             "lane_info": {
                 "current_lane": int(lane_info[0]),
                 "total_lanes": int(lane_info[1]),
             },
             "is_near_intersection": bool(lane_info[2]),
-            "speed_mph": float(speed)
         }
     except Exception as e:
         print(f"    ⚠️  Error reading .mat file {mat_path}: {e}")
         return {
             "lane_info": {"current_lane": 0, "total_lanes": 0},
             "is_near_intersection": False,
-            "speed_mph": 0
         }
 
 
@@ -94,7 +72,8 @@ def process_maneuver_samples(
     road_camera_dir: str,
     maneuver: str,
     output_dir: str,
-    samples_per_maneuver: int = 3
+    samples_per_maneuver: int = 3,
+    frames_per_sample: int = 10
 ) -> List[Dict]:
     """
     Process a subset of samples for a given maneuver type.
@@ -148,45 +127,37 @@ def process_maneuver_samples(
             continue
         mat_path = mat_files[0]
         
-        # Extract frames
-        # To get speed at middle frame, we need the index
-        cap = cv2.VideoCapture(face_video_path)
-        middle_frame_idx = 0
-        if cap.isOpened():
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            middle_frame_idx = total_frames // 2
-            cap.release()
-
-        success_face, face_frame = extract_middle_frame(face_video_path)
-        success_road, road_frame = extract_middle_frame(road_video_path)
+        # Extract frame sequences
+        face_frames = extract_frame_sequence(face_video_path, frames_per_sample)
+        road_frames = extract_frame_sequence(road_video_path, frames_per_sample)
         
-        if not success_face or not success_road:
-            print(f"    ⚠️  Failed to extract frames for {clip_name}")
+        if not face_frames or not road_frames or len(face_frames) != len(road_frames):
+            print(f"    ⚠️  Failed to extract sufficient frames for {clip_name}")
             continue
         
+        # Create a subdirectory for this sample's frames
+        sample_output_dir = os.path.join(output_dir, f"{maneuver}_{clip_name}")
+        os.makedirs(sample_output_dir, exist_ok=True)
+
         # Save frames
-        output_prefix = f"{maneuver}_{clip_name}"
-        driver_output_path = os.path.join(output_dir, f"{output_prefix}_driver.jpg")
-        road_output_path = os.path.join(output_dir, f"{output_prefix}_road.jpg")
-        
-        cv2.imwrite(driver_output_path, face_frame)
-        cv2.imwrite(road_output_path, road_frame)
+        for i, (face_frame, road_frame) in enumerate(zip(face_frames, road_frames)):
+            cv2.imwrite(os.path.join(sample_output_dir, f"driver_{i:02d}.jpg"), face_frame)
+            cv2.imwrite(os.path.join(sample_output_dir, f"road_{i:02d}.jpg"), road_frame)
         
         # Extract data from .mat file
-        context_data = extract_mat_data(mat_path, middle_frame_idx)
+        context_data = extract_mat_data(mat_path)
 
         # Create metadata file
         metadata = {
             "source": "Brain4Cars",
             "maneuver": maneuver,
             "clip_id": clip_name,
-            "face_video": face_video_path,
-            "road_video": road_video_path,
+            "num_frames": len(face_frames),
             "note": "No gaze ground truth available for Brain4Cars dataset"
         }
         metadata.update(context_data)
         
-        metadata_path = os.path.join(output_dir, f"{output_prefix}_gt.json")
+        metadata_path = os.path.join(sample_output_dir, "_gt.json")
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
         
@@ -215,8 +186,14 @@ def main():
     parser.add_argument(
         "--samples-per-maneuver",
         type=int,
-        default=3,
+        default=5,
         help="Number of samples to extract per maneuver type"
+    )
+    parser.add_argument(
+        "--frames-per-sample",
+        type=int,
+        default=20,
+        help="Number of frames to extract from each video to create a sequence"
     )
     parser.add_argument(
         "--maneuvers",
@@ -248,6 +225,7 @@ def main():
     print(f"   Input: {args.data_dir}")
     print(f"   Output: {output_dir}")
     print(f"   Samples per maneuver: {args.samples_per_maneuver}")
+    print(f"   Frames per sample: {args.frames_per_sample}")
     print()
     
     # Process each maneuver type
@@ -259,7 +237,8 @@ def main():
             road_camera_dir,
             maneuver,
             output_dir,
-            args.samples_per_maneuver
+            args.samples_per_maneuver,
+            args.frames_per_sample
         )
         all_samples.extend(samples)
         print()
