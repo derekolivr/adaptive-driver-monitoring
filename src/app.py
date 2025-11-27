@@ -74,52 +74,73 @@ def load_models():
     return models
 
 # --- Visualization ---
-def draw_gaze_vectors(image: Image.Image, pred_pitch, pred_yaw, gt_pitch=None, gt_yaw=None, length=150, thickness=4, flip_horizontal=False):
+def draw_gaze_vectors(image: Image.Image, pred_pitch, pred_yaw, gt_pitch=None, gt_yaw=None, length=120, thickness=4, flip_horizontal=False, flip_both_axes=False):
     """
     Draw gaze direction vectors on the face image.
     
     Coordinate system:
     - Yaw: positive = right, negative = left (horizontal)
-    - Pitch: positive = up, negative = down (vertical)
+    - Pitch: positive = down, negative = up (vertical in driving context)
     - Image coordinates: x increases right, y increases downward
     
-    Simplified vector calculation for small angles (typical gaze range):
-    - Horizontal (x): length * yaw (in radians, treating as proportional displacement)
-    - Vertical (y): -length * pitch (negated because image y increases downward)
-    
-    This approximation works well for gaze angles typically < 30-40° where sin(θ) ≈ θ (in radians)
+    Vector calculation calibrated to DashGaze ground truth:
+    - Typical gaze: ±5° yaw, -5° to +15° pitch
+    - Scale factor adjusted to make vectors visible but proportional
     
     Args:
         flip_horizontal: If True, negates yaw to flip horizontal direction (for Brain4Cars)
+        flip_both_axes: If True, negates both yaw and pitch (for Driver 8 with opposite coordinate system)
     """
     # Convert PIL RGB to BGR for OpenCV
     image_cv = cv2.cvtColor(np.array(image.copy()), cv2.COLOR_RGB2BGR)
     h, w = image_cv.shape[:2]
     center = (w // 2, h // 2)
     
-    # Apply horizontal flip if needed (for Brain4Cars coordinate system)
-    yaw_pred = -pred_yaw if flip_horizontal else pred_yaw
+    # Apply transformations based on coordinate system
+    if flip_both_axes:
+        # Driver 8: flip both axes (complete coordinate system inversion)
+        yaw_pred = -pred_yaw
+        pitch_pred = -pred_pitch
+    elif flip_horizontal:
+        # Other Brain4Cars: flip horizontal only
+        yaw_pred = -pred_yaw
+        pitch_pred = pred_pitch
+    else:
+        # DashGaze: no flip
+        yaw_pred = pred_yaw
+        pitch_pred = pred_pitch
     
     # Predicted gaze (RED)
-    # Use simplified projection: for small angles, sin(θ) ≈ θ (in radians)
-    # This makes the vector proportional to the angle, which is more intuitive
-    dx_pred = int(length * yaw_pred)
-    dy_pred = int(-length * pred_pitch)  # Negative because y increases downward in images
+    # Scale factor calibrated to ground truth observations
+    # DashGaze GT shows small angles (±5° typical), so we scale for visibility
+    scale = length / np.deg2rad(20)  # 20° = full length
+    dx_pred = int(scale * yaw_pred)
+    dy_pred = int(scale * pitch_pred)  # Use transformed pitch
     end_pred = (center[0] + dx_pred, center[1] + dy_pred)
     
     # Add text label with angle values
     cv2.arrowedLine(image_cv, center, end_pred, (0, 0, 255), thickness, tipLength=0.3)  # Red in BGR
-    label = f"P:{np.rad2deg(pred_pitch):.0f}° Y:{np.rad2deg(yaw_pred):.0f}°"
+    label = f"P:{np.rad2deg(pitch_pred):.0f}° Y:{np.rad2deg(yaw_pred):.0f}°"
     cv2.putText(image_cv, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
     
     # Ground truth (GREEN) - if available
     if gt_pitch is not None and gt_yaw is not None:
-        yaw_gt = -gt_yaw if flip_horizontal else gt_yaw
-        dx_gt = int(length * yaw_gt)
-        dy_gt = int(-length * gt_pitch)
+        if flip_both_axes:
+            yaw_gt = -gt_yaw
+            pitch_gt = -gt_pitch
+        elif flip_horizontal:
+            yaw_gt = -gt_yaw
+            pitch_gt = gt_pitch
+        else:
+            yaw_gt = gt_yaw
+            pitch_gt = gt_pitch
+        
+        scale = length / np.deg2rad(20)  # Same scaling as prediction
+        dx_gt = int(scale * yaw_gt)
+        dy_gt = int(scale * pitch_gt)
         end_gt = (center[0] + dx_gt, center[1] + dy_gt)
         cv2.arrowedLine(image_cv, center, end_gt, (0, 255, 0), thickness, tipLength=0.3)  # Green in BGR
-        label_gt = f"GT P:{np.rad2deg(gt_pitch):.0f}° Y:{np.rad2deg(yaw_gt):.0f}°"
+        label_gt = f"GT P:{np.rad2deg(pitch_gt):.0f}° Y:{np.rad2deg(yaw_gt):.0f}°"
         cv2.putText(image_cv, label_gt, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     
     # Convert BGR back to RGB for PIL
@@ -268,6 +289,11 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
     is_brain4cars = ground_truth.get('source') == 'Brain4Cars'
     apply_calibration = not is_brain4cars
     
+    # Determine driver-specific flip requirement
+    # All Brain4Cars drivers need horizontal flip
+    needs_horizontal_flip = is_brain4cars
+    needs_both_axes_flip = False
+    
     # Process gaze
     pred_pitch, pred_yaw = models["gaze"].predict_gaze(driver_image, apply_calibration=apply_calibration)
     
@@ -310,7 +336,9 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
         gaze_zone, 
         road_objects, 
         maneuver=maneuver, 
-        is_near_intersection=is_near_intersection
+        is_near_intersection=is_near_intersection,
+        pitch_deg=np.rad2deg(pred_pitch),
+        yaw_deg=np.rad2deg(pred_yaw)
     )
     
     with status_placeholder.container():
@@ -368,7 +396,9 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            gaze_image = draw_gaze_vectors(driver_image, pred_pitch, pred_yaw, gt_pitch, gt_yaw, flip_horizontal=is_brain4cars)
+            gaze_image = draw_gaze_vectors(driver_image, pred_pitch, pred_yaw, gt_pitch, gt_yaw, 
+                                          flip_horizontal=needs_horizontal_flip, 
+                                          flip_both_axes=needs_both_axes_flip)
             st.image(gaze_image, caption="Driver Face", use_container_width=True)
         
         with col2:
@@ -485,6 +515,11 @@ with tab2:
                     gt_data = json.load(f)
                 clip_id = gt_data.get('clip_id', scenario_name)
                 driver_id, driver_display_name = get_actual_driver_id(clip_id)
+                
+                # Skip Driver 8
+                if driver_id == "Driver_8":
+                    continue
+                
                 maneuver_type = gt_data.get('maneuver', 'unknown')
                 driver_ids.add(driver_id)
                 
@@ -500,7 +535,14 @@ with tab2:
         
         # Create display names for drivers with scenario counts
         driver_display_names = {}
-        sorted_driver_ids = sorted(driver_ids)
+        
+        # Custom sort: move Driver_1A to the end
+        def custom_driver_sort(driver_id):
+            if driver_id == "Driver_1A":
+                return ("zzz", driver_id)  # Sort to end
+            return ("aaa", driver_id)  # Sort normally
+        
+        sorted_driver_ids = sorted(driver_ids, key=custom_driver_sort)
         
         for driver_id in sorted_driver_ids:
             total = sum(len(scenarios) for scenarios in drivers_data[driver_id].values())

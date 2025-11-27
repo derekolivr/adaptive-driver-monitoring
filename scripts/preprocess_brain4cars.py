@@ -27,7 +27,7 @@ def extract_frame_sequence(video_path: str, num_frames: int = 10, frame_gap: int
         frame_gap: Extract every Nth frame (e.g., 3 = every 3rd frame)
         frame_start: Optional start frame index (for maneuver window)
         frame_end: Optional end frame index (for maneuver window)
-    
+        
     Returns:
         Tuple of (list of frames, list of frame indices)
     """
@@ -71,7 +71,7 @@ def extract_frame_sequence(video_path: str, num_frames: int = 10, frame_gap: int
     for i in range(num_frames):
         frame_idx = start_frame + (i * frame_gap)
         cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-        ret, frame = cap.read()
+    ret, frame = cap.read()
         if ret:
             frames.append(frame)
             frame_indices.append(frame_idx)
@@ -217,7 +217,7 @@ def process_maneuver_samples(
         if not os.path.exists(road_video_path):
             print(f"    ⚠️  No road video found for {clip_name}")
             continue
-
+        
         # Find corresponding .mat file (in face camera directory)
         mat_files = glob.glob(os.path.join(face_dir, "params_*.mat"))
         if not mat_files:
@@ -246,7 +246,7 @@ def process_maneuver_samples(
         # Create a subdirectory for this sample's frames
         sample_output_dir = os.path.join(output_dir, f"{maneuver}_{clip_name}")
         os.makedirs(sample_output_dir, exist_ok=True)
-
+        
         # Save frames
         for i, (face_frame, road_frame) in enumerate(zip(face_frames, road_frames)):
             cv2.imwrite(os.path.join(sample_output_dir, f"driver_{i:02d}.jpg"), face_frame)
@@ -254,7 +254,7 @@ def process_maneuver_samples(
         
         # Extract data from .mat file using actual frame indices
         context_data = extract_mat_data(mat_path, face_indices)
-
+        
         # Create metadata file
         metadata = {
             "source": "Brain4Cars",
