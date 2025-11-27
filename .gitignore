@@ -156,3 +156,6 @@ test/*.mp4
 test/*.avi
 test/*.mov
 test/*.csv
+
+# compiled video/dataset files
+driver_data

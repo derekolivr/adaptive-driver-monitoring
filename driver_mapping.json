@@ -1,0 +1,43 @@
+{
+  "driver_groups": {
+    "Driver 1A (20141019 - Morning)": {
+      "dates": ["20141019"],
+      "time_ranges": ["080000-120000"],
+      "description": "Driver from 20141019 morning sessions"
+    },
+    "Driver 1B (20141019 - Afternoon)": {
+      "dates": ["20141019"],
+      "time_ranges": ["120000-180000"],
+      "description": "Driver from 20141019 afternoon sessions"
+    },
+    "Driver 2 (20141025, 20141101, 20141102)": {
+      "dates": ["20141025", "20141101", "20141102"],
+      "description": "Same person across multiple dates"
+    },
+    "Driver 3 (20141105)": {
+      "dates": ["20141105"],
+      "description": "Single driver session"
+    },
+    "Driver 4 (20141115)": {
+      "dates": ["20141115"],
+      "description": "Single driver session"
+    },
+    "Driver 5 (20141116)": {
+      "dates": ["20141116"],
+      "description": "Single driver session"
+    },
+    "Driver 6 (20141123)": {
+      "dates": ["20141123"],
+      "description": "Single driver session"
+    },
+    "Driver 7 (20141126)": {
+      "dates": ["20141126"],
+      "description": "Single driver session"
+    },
+    "Driver 8 (20141220)": {
+      "dates": ["20141220"],
+      "description": "Single driver session"
+    }
+  },
+  "note": "This mapping groups scenarios by actual driver identity. Dates 20141025, 20141101, 20141102 are the same person. Date 20141019 contains multiple drivers split by time of day."
+}

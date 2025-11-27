@@ -5,7 +5,9 @@ import cv2
 import os
 import glob
 import json
+import re
 from typing import Dict
+from collections import defaultdict
 
 # Import the modules we created
 from gaze_tracker import GazeTracker
@@ -72,41 +74,141 @@ def load_models():
     return models
 
 # --- Visualization ---
-def draw_gaze_vectors(image: Image.Image, pred_pitch, pred_yaw, gt_pitch=None, gt_yaw=None, length=200, thickness=5):
-    """Draw gaze direction vectors on the face image."""
-    image_cv = np.array(image.copy())
+def draw_gaze_vectors(image: Image.Image, pred_pitch, pred_yaw, gt_pitch=None, gt_yaw=None, length=150, thickness=4, flip_horizontal=False):
+    """
+    Draw gaze direction vectors on the face image.
+    
+    Coordinate system:
+    - Yaw: positive = right, negative = left (horizontal)
+    - Pitch: positive = up, negative = down (vertical)
+    - Image coordinates: x increases right, y increases downward
+    
+    Simplified vector calculation for small angles (typical gaze range):
+    - Horizontal (x): length * yaw (in radians, treating as proportional displacement)
+    - Vertical (y): -length * pitch (negated because image y increases downward)
+    
+    This approximation works well for gaze angles typically < 30-40° where sin(θ) ≈ θ (in radians)
+    
+    Args:
+        flip_horizontal: If True, negates yaw to flip horizontal direction (for Brain4Cars)
+    """
+    # Convert PIL RGB to BGR for OpenCV
+    image_cv = cv2.cvtColor(np.array(image.copy()), cv2.COLOR_RGB2BGR)
     h, w = image_cv.shape[:2]
     center = (w // 2, h // 2)
     
+    # Apply horizontal flip if needed (for Brain4Cars coordinate system)
+    yaw_pred = -pred_yaw if flip_horizontal else pred_yaw
+    
     # Predicted gaze (RED)
-    # Note: In image coordinates, Y increases downward, so we flip pitch sign
-    dx_pred = int(length * np.sin(pred_yaw))
-    dy_pred = int(length * np.sin(pred_pitch))  # Flipped sign for correct visualization
+    # Use simplified projection: for small angles, sin(θ) ≈ θ (in radians)
+    # This makes the vector proportional to the angle, which is more intuitive
+    dx_pred = int(length * yaw_pred)
+    dy_pred = int(-length * pred_pitch)  # Negative because y increases downward in images
     end_pred = (center[0] + dx_pred, center[1] + dy_pred)
-    cv2.arrowedLine(image_cv, center, end_pred, (255, 0, 0), thickness, tipLength=0.3)
+    
+    # Add text label with angle values
+    cv2.arrowedLine(image_cv, center, end_pred, (0, 0, 255), thickness, tipLength=0.3)  # Red in BGR
+    label = f"P:{np.rad2deg(pred_pitch):.0f}° Y:{np.rad2deg(yaw_pred):.0f}°"
+    cv2.putText(image_cv, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
     
     # Ground truth (GREEN) - if available
     if gt_pitch is not None and gt_yaw is not None:
-        dx_gt = int(length * np.sin(gt_yaw))
-        dy_gt = int(length * np.sin(gt_pitch))  # Flipped sign for correct visualization
+        yaw_gt = -gt_yaw if flip_horizontal else gt_yaw
+        dx_gt = int(length * yaw_gt)
+        dy_gt = int(-length * gt_pitch)
         end_gt = (center[0] + dx_gt, center[1] + dy_gt)
-        cv2.arrowedLine(image_cv, center, end_gt, (0, 255, 0), thickness, tipLength=0.3)
+        cv2.arrowedLine(image_cv, center, end_gt, (0, 255, 0), thickness, tipLength=0.3)  # Green in BGR
+        label_gt = f"GT P:{np.rad2deg(gt_pitch):.0f}° Y:{np.rad2deg(yaw_gt):.0f}°"
+        cv2.putText(image_cv, label_gt, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     
-    return Image.fromarray(image_cv)
+    # Convert BGR back to RGB for PIL
+    return Image.fromarray(cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB))
 
 # --- Helper to find test scenarios ---
+def extract_driver_date(clip_id: str) -> str:
+    """Extract date (YYYYMMDD) from clip_id like '20141019_091035_1106_1256'."""
+    match = re.match(r'(\d{8})_', clip_id)
+    if match:
+        return match.group(1)
+    return "unknown"
+
+def extract_time_from_clip_id(clip_id: str) -> int:
+    """Extract time (HHMMSS) from clip_id like '20141019_091035_1106_1256'."""
+    match = re.match(r'\d{8}_(\d{6})_', clip_id)
+    if match:
+        return int(match.group(1))
+    return 0
+
+def get_actual_driver_id(clip_id: str) -> tuple:
+    """
+    Map clip_id to actual driver ID based on user-identified driver groups.
+    Returns (driver_id, driver_display_name) tuple.
+    
+    Rules:
+    - Dates 20141025, 20141101, 20141102 are the same person (Driver 2)
+    - Date 20141019 has multiple drivers split by time of day:
+      * Morning (< 12:00) = Driver 1A
+      * Afternoon (>= 12:00) = Driver 1B
+    - Other dates are separate drivers
+    """
+    date = extract_driver_date(clip_id)
+    
+    # Merge dates 20141025, 20141101, 20141102 into one driver
+    if date in ["20141025", "20141101", "20141102"]:
+        return ("Driver_2", "Driver 2 (20141025, 20141101, 20141102)")
+    
+    # Split 20141019 by time of day
+    if date == "20141019":
+        time = extract_time_from_clip_id(clip_id)
+        hour = time // 10000
+        if hour < 12:
+            return ("Driver_1A", "Driver 1A (20141019 - Morning)")
+        else:
+            return ("Driver_1B", "Driver 1B (20141019 - Afternoon)")
+    
+    # Map other dates to driver numbers
+    date_to_driver = {
+        "20141105": ("Driver_3", "Driver 3 (20141105)"),
+        "20141115": ("Driver_4", "Driver 4 (20141115)"),
+        "20141116": ("Driver_5", "Driver 5 (20141116)"),
+        "20141123": ("Driver_6", "Driver 6 (20141123)"),
+        "20141126": ("Driver_7", "Driver 7 (20141126)"),
+        "20141220": ("Driver_8", "Driver 8 (20141220)"),
+    }
+    
+    if date in date_to_driver:
+        return date_to_driver[date]
+    
+    # Fallback for unknown dates
+    if date != "unknown":
+        return (f"Driver_{date}", f"Driver ({date})")
+    
+    return ("Driver_Unknown", "Driver (Unknown)")
+
 def find_brain4cars_scenarios(data_dir: str) -> Dict:
     """Finds Brain4Cars scenarios, which are organized as directories of frames."""
     scenarios = {}
     if not os.path.exists(data_dir):
         return scenarios
-        
+    
+    # First, find directories with _gt.json inside
     sample_dirs = sorted([d for d in glob.glob(os.path.join(data_dir, "*/")) if os.path.isdir(d)])
     
     for sample_dir in sample_dirs:
         gt_path = os.path.join(sample_dir, "_gt.json")
         if os.path.exists(gt_path):
             base_name = os.path.basename(os.path.normpath(sample_dir))
+            scenarios[base_name] = sample_dir
+    
+    # Also check for _gt.json files at root level (they correspond to directories)
+    root_gt_files = glob.glob(os.path.join(data_dir, "*_gt.json"))
+    for gt_file in root_gt_files:
+        # Extract base name (e.g., "end_action_20141019_091035_1106_1256" from "end_action_20141019_091035_1106_1256_gt.json")
+        base_name = os.path.basename(gt_file).replace("_gt.json", "")
+        # Check if corresponding directory exists
+        sample_dir = os.path.join(data_dir, base_name)
+        if os.path.isdir(sample_dir) and base_name not in scenarios:
             scenarios[base_name] = sample_dir
             
     return scenarios
@@ -175,11 +277,18 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
     # Debug output for Brain4Cars to verify values
     if is_brain4cars:
         with st.sidebar.expander("🔍 Debug - Gaze Values", expanded=show_details):
-            st.write(f"**Final values:**")
+            # Show raw model outputs
+            raw_pitch = models["gaze"].last_raw_pitch
+            raw_yaw = models["gaze"].last_raw_yaw
+            st.write(f"**Raw model outputs:**")
+            st.write(f"Pitch: {np.rad2deg(raw_pitch):.2f}° ({raw_pitch:.4f} rad)")
+            st.write(f"Yaw: {np.rad2deg(raw_yaw):.2f}° ({raw_yaw:.4f} rad)")
+            
+            st.write(f"**After processing (centered & scaled):**")
             st.write(f"Pitch: {np.rad2deg(pred_pitch):.2f}° ({pred_pitch:.4f} rad)")
             st.write(f"Yaw: {np.rad2deg(pred_yaw):.2f}° ({pred_yaw:.4f} rad)")
             st.write(f"**Gaze Zone:** {gaze_zone}")
-            st.write(f"**Note:** If values are clustered, the model may need different interpretation")
+            st.write(f"**Note:** Raw values are re-centered (+8° to pitch) and scaled (5x) for visualization")
     
     # Process road
     annotated_road_image, road_objects = models["road"].detect_objects(road_image)
@@ -259,7 +368,7 @@ def process_and_display(driver_image, road_image, ground_truth, show_images, sho
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            gaze_image = draw_gaze_vectors(driver_image, pred_pitch, pred_yaw, gt_pitch, gt_yaw)
+            gaze_image = draw_gaze_vectors(driver_image, pred_pitch, pred_yaw, gt_pitch, gt_yaw, flip_horizontal=is_brain4cars)
             st.image(gaze_image, caption="Driver Face", use_container_width=True)
         
         with col2:
@@ -359,77 +468,120 @@ with tab2:
     st.markdown("Brain4Cars dataset with driving maneuver annotations (lane changes, turns, straight driving)")
     
     if brain4cars_scenarios:
-        # Group scenarios by maneuver type
-        maneuvers = {}
+        # Group scenarios by actual driver ID (not just date) first, then by maneuver type
+        drivers_data = defaultdict(lambda: defaultdict(list))
+        driver_ids = set()
+        driver_info = {}  # Store display info for each driver
+        
         for scenario_name, sample_dir in brain4cars_scenarios.items():
+            # Try both locations for _gt.json
             gt_path = os.path.join(sample_dir, "_gt.json")
+            if not os.path.exists(gt_path):
+                # Try root level
+                gt_path = os.path.join(BRAIN4CARS_DIR, f"{scenario_name}_gt.json")
+            
             if os.path.exists(gt_path):
                 with open(gt_path, 'r') as f:
                     gt_data = json.load(f)
+                clip_id = gt_data.get('clip_id', scenario_name)
+                driver_id, driver_display_name = get_actual_driver_id(clip_id)
                 maneuver_type = gt_data.get('maneuver', 'unknown')
-                if maneuver_type not in maneuvers:
-                    maneuvers[maneuver_type] = []
-                maneuvers[maneuver_type].append((scenario_name, sample_dir, gt_data))
+                driver_ids.add(driver_id)
+                
+                # Store display info
+                if driver_id not in driver_info:
+                    driver_info[driver_id] = {
+                        'display_name': driver_display_name,
+                        'dates': set()
+                    }
+                driver_info[driver_id]['dates'].add(extract_driver_date(clip_id))
+                
+                drivers_data[driver_id][maneuver_type].append((scenario_name, sample_dir, gt_data))
         
-        # Display maneuver selector
-        maneuver_display = {
-            'lchange': '⬅️ Left Lane Change',
-            'rchange': '➡️ Right Lane Change',
-            'lturn': '↰ Left Turn',
-            'rturn': '↱ Right Turn',
-            'end_action': '⬆️ Straight Driving'
-        }
+        # Create display names for drivers with scenario counts
+        driver_display_names = {}
+        sorted_driver_ids = sorted(driver_ids)
         
-        maneuver_keys = sorted([m for m in maneuvers.keys() if m in maneuver_display])
-        if maneuver_keys:
-            selected_maneuver = st.selectbox(
-                "Select Maneuver Type", 
-                maneuver_keys,
-                format_func=lambda x: maneuver_display.get(x, x),
-                key="brain4cars_maneuver"
+        for driver_id in sorted_driver_ids:
+            total = sum(len(scenarios) for scenarios in drivers_data[driver_id].values())
+            base_name = driver_info[driver_id]['display_name']
+            driver_display_names[driver_id] = f"{base_name} - {total} scenarios"
+        
+        # Display driver selector
+        if sorted_driver_ids:
+            selected_driver_id = st.selectbox(
+                "Select Driver",
+                sorted_driver_ids,
+                format_func=lambda x: driver_display_names.get(x, x),
+                key="brain4cars_driver"
             )
             
-            # Collect all frames from all samples of this maneuver
-            all_frames = []
-            for scenario_name, sample_dir, gt_data in maneuvers[selected_maneuver]:
-                num_frames = gt_data.get("num_frames", 1)
-                for frame_idx in range(num_frames):
-                    driver_path = os.path.join(sample_dir, f"driver_{frame_idx:02d}.jpg")
-                    road_path = os.path.join(sample_dir, f"road_{frame_idx:02d}.jpg")
-                    if os.path.exists(driver_path) and os.path.exists(road_path):
-                        all_frames.append({
-                            'driver_path': driver_path,
-                            'road_path': road_path,
-                            'ground_truth': gt_data,
-                            'scenario': scenario_name,
-                            'frame_idx': frame_idx
-                        })
+            # Get maneuvers for selected driver
+            driver_maneuvers = drivers_data[selected_driver_id]
             
-            if all_frames:
-                # Frame slider across all samples
-                total_frames = len(all_frames)
-                frame_idx = st.slider(
-                    f"Frame Sequence ({total_frames} frames across {len(maneuvers[selected_maneuver])} samples)",
-                    0, 
-                    total_frames - 1, 
-                    0,
-                    key="brain4cars_frame"
+            # Display maneuver selector
+            maneuver_display = {
+                'lchange': '⬅️ Left Lane Change',
+                'rchange': '➡️ Right Lane Change',
+                'lturn': '↰ Left Turn',
+                'rturn': '↱ Right Turn',
+                'end_action': '⬆️ Straight Driving'
+            }
+            
+            maneuver_keys = sorted([m for m in driver_maneuvers.keys() if m in maneuver_display])
+            if maneuver_keys:
+                selected_maneuver = st.selectbox(
+                    "Select Maneuver Type", 
+                    maneuver_keys,
+                    format_func=lambda x: f"{maneuver_display.get(x, x)} ({len(driver_maneuvers[x])} samples)",
+                    key="brain4cars_maneuver"
                 )
                 
-                # Get the selected frame
-                selected_frame = all_frames[frame_idx]
-                driver_image = Image.open(selected_frame['driver_path'])
-                road_image = Image.open(selected_frame['road_path'])
-                ground_truth = selected_frame['ground_truth']
+                # Collect all frames from all samples of this maneuver for this driver
+                all_frames = []
+                for scenario_name, sample_dir, gt_data in driver_maneuvers[selected_maneuver]:
+                    num_frames = gt_data.get("num_frames", 1)
+                    for frame_idx in range(num_frames):
+                        driver_path = os.path.join(sample_dir, f"driver_{frame_idx:02d}.jpg")
+                        road_path = os.path.join(sample_dir, f"road_{frame_idx:02d}.jpg")
+                        if os.path.exists(driver_path) and os.path.exists(road_path):
+                            all_frames.append({
+                                'driver_path': driver_path,
+                                'road_path': road_path,
+                                'ground_truth': gt_data,
+                                'scenario': scenario_name,
+                                'frame_idx': frame_idx
+                            })
                 
-                # Show which sample and frame we're viewing
-                st.caption(f"📹 Sample: {selected_frame['scenario']} | Frame: {selected_frame['frame_idx']:02d}")
-                
-                process_and_display(driver_image, road_image, ground_truth, show_images, show_details)
+                if all_frames:
+                    # Frame slider across all samples
+                    total_frames = len(all_frames)
+                    frame_idx = st.slider(
+                        f"Frame Sequence ({total_frames} frames across {len(driver_maneuvers[selected_maneuver])} samples)",
+                        0, 
+                        total_frames - 1, 
+                        0,
+                        key="brain4cars_frame"
+                    )
+                    
+                    # Get the selected frame
+                    selected_frame = all_frames[frame_idx]
+                    driver_image = Image.open(selected_frame['driver_path'])
+                    road_image = Image.open(selected_frame['road_path'])
+                    ground_truth = selected_frame['ground_truth']
+                    
+                    # Show which driver, sample and frame we're viewing
+                    dates = sorted(driver_info[selected_driver_id]['dates'])
+                    date_str = ", ".join(dates) if len(dates) <= 2 else f"{dates[0]}..."
+                    st.caption(f"👤 {driver_display_names[selected_driver_id].split(' -')[0]} | 📹 Sample: {selected_frame['scenario']} | Frame: {selected_frame['frame_idx']:02d}")
+                    
+                    process_and_display(driver_image, road_image, ground_truth, show_images, show_details)
+                else:
+                    st.error("No frame images found for this maneuver type.")
             else:
-                st.error("No frame images found for this maneuver type.")
+                st.warning(f"No valid maneuvers found for {driver_display_names.get(selected_driver_id, selected_driver_id)}.")
         else:
-            st.warning("No valid maneuvers found in Brain4Cars data.")
+            st.warning("No valid drivers found in Brain4Cars data.")
 
     else:
         st.warning("⚠️ No Brain4Cars scenarios found. Please run preprocessing first.")

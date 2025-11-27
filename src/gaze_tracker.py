@@ -53,8 +53,9 @@ class GazeTracker:
         
         raw_pitch, raw_yaw = output.cpu().numpy()[0]
         
-        # Debug: Print raw model outputs (uncomment to debug)
-        # print(f"Raw model output - Pitch: {raw_pitch:.6f} rad ({np.rad2deg(raw_pitch):.2f}°), Yaw: {raw_yaw:.6f} rad ({np.rad2deg(raw_yaw):.2f}°)")
+        # Store raw values for debugging
+        self.last_raw_pitch = raw_pitch
+        self.last_raw_yaw = raw_yaw
         
         if apply_calibration:
             # Apply linear calibration (computed from gaze_calibration.json)
@@ -69,12 +70,27 @@ class GazeTracker:
             pitch = np.deg2rad(calibrated_pitch_deg)
             yaw = np.deg2rad(calibrated_yaw_deg)
         else:
-            # For Brain4Cars: Apply multiplier to amplify variation in model outputs
-            # The model outputs are clustered, so we multiply to get more variation
-            # This is a heuristic to make the gaze predictions more responsive
-            multiplier = 3.0  # Amplify the variation
+            # For Brain4Cars: The model was trained on MPIIFaceGaze which has a bias
+            # Raw outputs are typically around -0.14 rad (-8°) for pitch and near 0 for yaw
+            # We need to re-center and scale these outputs
             
-            pitch = raw_pitch * multiplier
-            yaw = raw_yaw * multiplier
+            # Convert to degrees for easier interpretation
+            raw_pitch_deg = np.rad2deg(raw_pitch)
+            raw_yaw_deg = np.rad2deg(raw_yaw)
+            
+            # Re-center around 0 by subtracting the observed mean bias
+            # Observed: pitch clusters around -8°, yaw clusters around 0°
+            centered_pitch_deg = raw_pitch_deg + 8.0  # Add offset to center around 0
+            centered_yaw_deg = raw_yaw_deg  # Yaw is already roughly centered
+            
+            # Now scale to amplify variation (the model outputs have low variance)
+            # Use a larger scale factor since we're centering first
+            scale_factor = 5.0
+            scaled_pitch_deg = centered_pitch_deg * scale_factor
+            scaled_yaw_deg = centered_yaw_deg * scale_factor
+            
+            # Convert back to radians
+            pitch = np.deg2rad(scaled_pitch_deg)
+            yaw = np.deg2rad(scaled_yaw_deg)
         
         return pitch, yaw
